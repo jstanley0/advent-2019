@@ -1,5 +1,5 @@
 class Computer
-  TRACE = false
+  TRACE = ENV['TRACE']
 
   ARGCOUNT = [
     0,  # N/A
@@ -24,13 +24,14 @@ class Computer
     else
       parse_program(infer_program)
     end
+    @id = next_id
     @ip = 0
     @base = 0
     @inputs = inputs
     @outputs = []
   end
 
-  # returns the new instruction pointer, or nil if halted
+  # returns the new instruction pointer, :need_input if waiting on input, or nil if halted
   # consumes @inputs and produces @outputs
   def step
     instcode = @memory[@ip]
@@ -40,12 +41,12 @@ class Computer
     argcount = ARGCOUNT[opcode] || 0
     addressing_modes = argcount.times.map { |ix| (instcode / (10 ** (ix + 2))) % 10 }
     args = addressing_modes.each_with_index.map do |am, ix|
-      raw_arg = @memory[@ip + ix + 1] #|| 0
+      raw_arg = @memory[@ip + ix + 1]
       translate_arg(opcode, ix, raw_arg, am)
     end
 
     if TRACE
-      STDERR.puts "@ip=#{@ip} @base=#{@base} inst=#{@memory[@ip..@ip+argcount].inspect} opcode=#{opcode} am=#{addressing_modes.inspect} args=#{args.inspect}"
+      STDERR.puts "#{@id} @ip=#{@ip} @base=#{@base} inst=#{@memory[@ip..@ip+argcount].inspect} opcode=#{opcode} am=#{addressing_modes.inspect} args=#{args.inspect}"
     end
 
     jump_target = nil
@@ -55,7 +56,11 @@ class Computer
     when 2 # mul
       @memory[args[2]] = args[0] * args[1]
     when 3 # in
-      @memory[args[0]] = @inputs.any? ? @inputs.shift : get_input
+      if @inputs.any?
+        @memory[args[0]] = @inputs.shift
+      else
+        return :need_input
+      end
     when 4 # out
       @outputs << args[0]
     when 5 # jnz
@@ -81,30 +86,52 @@ class Computer
     end
   end
 
-  def get_input
-    print "? "
-    STDIN.gets.to_i
-  end
-
   def run_interactive
     loop do
       output = compute
       break if output.nil?
+      if output == :need_input
+        print "? "
+        queue_input(STDIN.gets.to_i)
+        next
+      end
       puts output
     end
   end
 
-  # accepts an input and runs until an output is produced or the machine halts
-  # returns the output, or nil if the machine halted
-  def compute(*inputs)
+  def queue_input(*inputs)
     @inputs.concat(inputs)
-    while step
-      return @outputs.shift if @outputs.any?
+  end
+
+  # optionally accepts inputs and runs until an output is produced,
+  # an input is required, or the machine halts
+  # returns:
+  #   Integer output produced
+  #   :need_input if an input is required and none is queued
+  #   nil if the program has halted
+  def compute(*inputs)
+    queue_input(*inputs)
+    loop do
+      result = step
+      if result.nil?
+        break
+      elsif result.is_a?(Symbol)
+        return result
+      elsif @outputs.any?
+        return @outputs.shift
+      end
     end
     nil
   end
 
   private
+
+  def next_id
+    @@next_id ||= 'A'
+    ret = @@next_id
+    @@next_id = @@next_id.succ
+    ret
+  end
 
   def infer_program
     if ARGV.length == 1
