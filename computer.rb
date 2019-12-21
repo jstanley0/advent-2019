@@ -124,6 +124,10 @@ class Computer
     nil
   end
 
+  def poke(address, value)
+    @memory[address] = value
+  end
+
   private
 
   def next_id
