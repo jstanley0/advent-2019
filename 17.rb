@@ -17,7 +17,8 @@ def find_intersections(map)
   intersections
 end
 
-computer = Computer.new
+program = ARGF.read.freeze
+computer = Computer.new(program)
 
 map = ''
 loop do
@@ -25,7 +26,27 @@ loop do
   break if c.nil?
   map += c.chr
 end
+puts map
 
 map = map.split("\n")
 
 puts find_intersections(map).map { |coords| coords.inject(:*) }.inject(:+)
+
+computer = Computer.new(program)
+computer.poke 0, 2
+computer.ascii_input(<<STUPID_ROOMBA)
+A,B,A,C,A,B,A,C,B,C
+R,4,L,12,L,8,R,4
+L,8,R,10,R,10,R,6
+R,4,R,10,L,12
+n
+STUPID_ROOMBA
+loop do
+  r = computer.compute
+  if r < 127
+    print r.chr
+  else
+    puts r
+    break
+  end
+end
