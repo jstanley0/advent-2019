@@ -103,6 +103,10 @@ class Computer
     @inputs.concat(inputs)
   end
 
+  def ascii_input(text)
+    @inputs.concat(text.chars.map(&:ord))
+  end
+
   # optionally accepts inputs and runs until an output is produced,
   # an input is required, or the machine halts
   # returns:
