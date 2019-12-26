@@ -1,7 +1,4 @@
-require 'byebug'
-
-CARDS = 119315717514047
-SHUFFLES = 101741582076661
+CARDS = 10007
 
 class CardOp
   def tag; end
@@ -13,6 +10,10 @@ class Reverse < CardOp
 
   def inspect
     'reverse'
+  end
+
+  def perform(deck)
+    deck.reverse
   end
 end
 
@@ -26,6 +27,10 @@ class Cut < CardOp
   def inspect
     "cut #{@arg}"
   end
+
+  def perform(deck)
+    deck[@arg..-1] + deck[0...@arg]
+  end
 end
 
 class Splay < CardOp
@@ -37,6 +42,15 @@ class Splay < CardOp
 
   def inspect
     "splay #{@arg}"
+  end
+
+  def perform(deck)
+    raise "broken" if deck.size % @arg == 0
+    new_deck = []
+    for j in 0...deck.size
+      new_deck[(@arg * j) % deck.size] = deck[j]
+    end
+    new_deck
   end
 end
 
@@ -110,8 +124,25 @@ ARGF.each_line do |line|
   end
 end
 
+def sanity_check(ops)
+  cards = (0...CARDS).to_a
+  ops.each { |op| cards = op.perform(cards) }
+  puts cards[0..30].inspect
+  puts cards.index(2019)
+end
+
+sanity_check ops
+
 while bubbleReverse(ops); end
+
+sanity_check ops
+
 while bubbleSplay(ops); end
+
+sanity_check ops
+
 while consolidateCut(ops); end
 
-puts "input reduced to: #{ops.inspect}"
+sanity_check ops
+
+puts ops.inspect
