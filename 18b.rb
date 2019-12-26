@@ -66,7 +66,7 @@ class State
     new_maze = dup_maze(@maze)
     new_maze[@locs[move.robot][1]][@locs[move.robot][0]] = '.'
     new_maze[move.y][move.x] = ('0'.ord + move.robot).chr
-    new_locs = @locs.map(&:dup)
+    new_locs = @locs.dup
     new_locs[move.robot] = [move.x, move.y]
     new_subset = @subset_mask | (1 << (move.key.ord - 'a'.ord))
     State.new(new_maze, new_locs, @keys + move.key, @base_cost + move.cost, new_subset)
