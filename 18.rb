@@ -36,11 +36,10 @@ class Maze
     locate_keys
     locate_robot
     build_graph
-    pp @map
+    #pp @map
   end
 
   def connections_from(key, subset_mask)
-    res = {}
     @map[key].each do |dest, connection|
       # skip keys we already possess
       next if subset_mask & Maze.key_bit(dest) != 0
@@ -50,19 +49,27 @@ class Maze
       # skip keys we can't reach
       next unless (connection.reqs & subset_mask) == connection.reqs
 
-      res[dest] = connection.cost
+      yield dest, connection.cost
     end
-    res
+    nil
   end
 
   # note that this does not consider whether the key is currently reachable
+  # we just need a lower bound on the remaining cost of this path
   def furthest_key_distance(key, subset_mask)
-    max = 0
-    @map[key].each do |dest, connection|
+    @map[key].reverse_each do |dest, connection|
       next if subset_mask & Maze.key_bit(dest) != 0
-      max = connection.cost if connection.cost > max
+      return connection.cost
     end
-    max
+    0
+  end
+
+  def key_count
+    @keys.size
+  end
+
+  def complete?(mask)
+    mask == @complete_mask
   end
 
   private
@@ -73,6 +80,7 @@ class Maze
     @keys.each do |key, loc|
       bfs(loc[0], loc[1], key)
     end
+    nil
   end
 
   def bfs(x, y, origin)
@@ -146,10 +154,12 @@ class Maze
 
   def locate_keys
     @keys = {}
+    @complete_mask = 0
     @maze.each_with_index do |row, y|
       for x in 0...row.size
         if ('a'..'z').include?(row[x])
           @keys[row[x]] = [x, y]
+          @complete_mask |= Maze.key_bit(row[x])
         end
       end
     end
@@ -171,19 +181,22 @@ class State
     @subset_mask = subset_mask
   end
 
+  def complete?
+    @maze.complete?(@subset_mask)
+  end
+
   # return a hash from collectable key to move cost
-  def enum_moves
-    @moves ||= @maze.connections_from(@at, @subset_mask)
+  def enum_paths(&block)
+    @maze.connections_from(@at, @subset_mask, &block)
   end
 
   # return a new State after having taken the given key
-  def apply_move(key)
-    State.new(@maze, key, @keys + key, @base_cost + @moves[key], @subset_mask | Maze.key_bit(key))
+  def apply_move(key, cost)
+    State.new(@maze, key, @keys + key, @base_cost + cost, @subset_mask | Maze.key_bit(key))
   end
 
   def print
-    puts "Keys: #{@keys}  Base cost: #{@base_cost}  Cost estimate: #{cost_estimate}"
-    puts
+    puts "At #{@at}  Keys: #{@keys}  Base cost: #{@base_cost}  Cost estimate: #{cost_estimate}"
   end
 
   # this must not overestimate the cost
@@ -204,27 +217,57 @@ end
 $best_cost = LOTS
 $best_subset_costs = {}
 
-maze = Maze.new
-pq = PQueue.new { |a, b| b.cost_estimate <=> a.cost_estimate }
-pq.push State.new(maze)
-until pq.empty?
-  state = pq.pop
-  # print state
-  next if state.cost_estimate > $best_cost
+def depth_charge(state, greedy = false)
+  return if state.cost_estimate > $best_cost
 
-  moves = state.enum_moves
-  if moves.empty?
+  if state.complete?
     if state.base_cost < $best_cost
-      puts "solution found: #{state.base_cost} #{state.keys}"
+      puts "#{greedy ? "greedy" : "random"} solution found: #{state.base_cost} #{state.keys}"
       $best_cost = state.base_cost
     end
+  else
+    substates = []
+    state.enum_paths do |key, cost|
+      substates << [key, cost]
+      break if greedy
+    end
+    key, cost = substates.sample
+    return if state.base_cost + cost >= $best_cost
+    return if prune_subtree?(key, state.base_cost + cost, state.subset_mask)
+    depth_charge(state.apply_move(key, cost), greedy)
   end
+end
 
-  moves.each do |key, cost|
-    next if state.base_cost + cost >= $best_cost
-    next if prune_subtree?(key, state.base_cost + cost, state.subset_mask)
-    substate = state.apply_move(key)
-    pq.push(substate)
+maze = Maze.new
+start_state = State.new(maze)
+
+# run the greedy solution first, for the lulz
+depth_charge(start_state, true)
+
+# make some random depth-first runs to prime the pruning shears
+[maze.key_count ** 4, 1000000].min.times do
+  depth_charge(start_state)
+end
+
+# now run the breadth-first search
+pq = PQueue.new { |a, b| b.cost_estimate <=> a.cost_estimate }
+pq.push start_state
+until pq.empty?
+  state = pq.pop
+  #state.print
+  next if state.cost_estimate > $best_cost
+
+  if state.complete?
+    if state.base_cost < $best_cost
+      puts "BFS solution found: #{state.base_cost} #{state.keys}"
+      $best_cost = state.base_cost
+    end
+  else
+    state.enum_paths do |key, cost|
+      next if state.base_cost + cost >= $best_cost
+      next if prune_subtree?(key, state.base_cost + cost, state.subset_mask)
+      pq.push(state.apply_move(key, cost))
+    end
   end
 end
 
