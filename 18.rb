@@ -7,19 +7,26 @@ require 'pp'
 LOTS = 1000000000
 
 class Connection
-  attr_accessor :cost, :reqs
+  attr_accessor :cost, :reqs, :passed_by
 
-  def initialize(cost, reqs)
+  def initialize(cost, reqs, passed_by)
     @cost = cost
     @reqs = reqs
+    @passed_by = passed_by
   end
 
   def inspect
-    keys = ''
+    "cost=#{cost} reqs=#{letter_set(@reqs)} passed_by=#{letter_set(@passed_by).downcase}"
+  end
+
+  private
+
+  def letter_set(bits)
+    letters = ''
     ('A'..'Z').each_with_index do |l, i|
-      keys += l if (reqs & (1 << i)) != 0
+      letters += l if (bits & (1 << i)) != 0
     end
-    "#{cost} #{keys}"
+    letters
   end
 end
 
@@ -29,7 +36,7 @@ class Maze
     locate_keys
     locate_robot
     build_graph
-    #pp @map
+    pp @map
   end
 
   def connections_from(key, subset_mask)
@@ -37,6 +44,9 @@ class Maze
     @map[key].each do |dest, connection|
       # skip keys we already possess
       next if subset_mask & Maze.key_bit(dest) != 0
+      # skip keys that are beyond other keys we *don't* already possess
+      # i.e. any bit is 1 in passed_by but is 0 in subset_mask
+      next if (connection.passed_by & ~subset_mask) != 0
       # skip keys we can't reach
       next unless (connection.reqs & subset_mask) == connection.reqs
 
@@ -71,11 +81,11 @@ class Maze
     @origin = origin
     @map[@origin] = {}
     @cost = 1
-    leading_edge = [[x, y, 0]]
+    leading_edge = [[x, y, 0, 0]]
     loop do
       next_edge = []
-      leading_edge.each do |x, y, reqs|
-        next_edge.concat search_from(x, y, reqs)
+      leading_edge.each do |x, y, reqs, passed_by|
+        next_edge.concat search_from(x, y, reqs, passed_by)
       end
       break if next_edge.empty?
       leading_edge = next_edge
@@ -91,7 +101,7 @@ class Maze
     (1 << (door.ord - 'A'.ord))
   end
 
-  def visit_cell(x, y, reqs)
+  def visit_cell(x, y, reqs, passed_by)
     c = @scratch[y][x]
     case c
     when '.', '@'
@@ -104,18 +114,21 @@ class Maze
     return nil unless space || key || door
 
     reqs |= Maze.door_bit(c) if door
-    @map[@origin][c] = Connection.new(@cost, reqs) if key
+    if key
+      @map[@origin][c] = Connection.new(@cost, reqs, passed_by)
+      passed_by |= Maze.key_bit(c)
+    end
 
     @scratch[y][x] = ' '
-    return x, y, reqs
+    return x, y, reqs, passed_by
   end
 
-  def search_from(x, y, reqs)
+  def search_from(x, y, reqs, passed_by)
     frontier = []
-    frontier << visit_cell(x - 1, y, reqs)
-    frontier << visit_cell(x, y - 1, reqs)
-    frontier << visit_cell(x + 1, y, reqs)
-    frontier << visit_cell(x, y + 1, reqs)
+    frontier << visit_cell(x - 1, y, reqs, passed_by)
+    frontier << visit_cell(x, y - 1, reqs, passed_by)
+    frontier << visit_cell(x + 1, y, reqs, passed_by)
+    frontier << visit_cell(x, y + 1, reqs, passed_by)
     frontier.compact
   end
 
