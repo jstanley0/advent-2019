@@ -1,116 +1,181 @@
 require 'byebug'
 require 'pqueue'
+require 'pp'
 
 # something bigger than the largest expected solution
 # but small enough so as not to slow down the math :P
 LOTS = 1000000000
 
-def find_char(maze, char)
-  maze.each_with_index do |row, y|
-    x = row.index(char)
-    return [x, y] if x
-  end
-  nil
-end
+class Connection
+  attr_accessor :cost, :reqs
 
-def dup_maze(source = nil)
-  source ||= $maze
-  source.map(&:dup)
-end
-
-Move = Struct.new(:key, :cost, :x, :y)
-
-class State
-  attr_reader :base_cost, :keys, :subset_mask
-
-  def initialize(maze, loc, keys = "", cost = 0, subset_mask = 0)
-    @maze = maze
-    @keys = keys
-    @base_cost = cost
-    @loc = loc
-    @subset_mask = subset_mask
-    @moves = PQueue.new { |a, b| b.cost <=> a.cost }
+  def initialize(cost, reqs)
+    @cost = cost
+    @reqs = reqs
   end
 
-  # return a hash from key that can be collected to move cost
-  def enum_moves
-    @scratch = dup_maze(@maze)
+  def inspect
+    keys = ''
+    ('A'..'Z').each_with_index do |l, i|
+      keys += l if (reqs & (1 << i)) != 0
+    end
+    "#{cost} #{keys}"
+  end
+end
+
+class Maze
+  def initialize
+    @maze = ARGF.readlines.map(&:freeze).freeze
+    locate_keys
+    locate_robot
+    build_graph
+    #pp @map
+  end
+
+  def connections_from(key, subset_mask)
+    res = {}
+    @map[key].each do |dest, connection|
+      # skip keys we already possess
+      next if subset_mask & Maze.key_bit(dest) != 0
+      # skip keys we can't reach
+      next unless (connection.reqs & subset_mask) == connection.reqs
+
+      res[dest] = connection.cost
+    end
+    res
+  end
+
+  # note that this does not consider whether the key is currently reachable
+  def furthest_key_distance(key, subset_mask)
+    max = 0
+    @map[key].each do |dest, connection|
+      next if subset_mask & Maze.key_bit(dest) != 0
+      max = connection.cost if connection.cost > max
+    end
+    max
+  end
+
+  private
+
+  def build_graph
+    @map = {}
+    bfs(@robot[0], @robot[1], '@')
+    @keys.each do |key, loc|
+      bfs(loc[0], loc[1], key)
+    end
+  end
+
+  def bfs(x, y, origin)
+    make_scratch_maze
+    @scratch[y][x] = '.'
+    @origin = origin
+    @map[@origin] = {}
     @cost = 1
-    leading_edge = [@loc]
+    leading_edge = [[x, y, 0]]
     loop do
       next_edge = []
-      leading_edge.each do |x, y|
-        next_edge.concat search_from(x, y)
+      leading_edge.each do |x, y, reqs|
+        next_edge.concat search_from(x, y, reqs)
       end
       break if next_edge.empty?
       leading_edge = next_edge
       @cost += 1
     end
+  end
 
-    @moves
+  def self.key_bit(key)
+    (1 << (key.ord - 'a'.ord))
+  end
+
+  def self.door_bit(door)
+    (1 << (door.ord - 'A'.ord))
+  end
+
+  def visit_cell(x, y, reqs)
+    c = @scratch[y][x]
+    case c
+    when '.', '@'
+      space = true
+    when 'a'..'z'
+      key = true
+    when 'A'..'Z'
+      door = true
+    end
+    return nil unless space || key || door
+
+    reqs |= Maze.door_bit(c) if door
+    @map[@origin][c] = Connection.new(@cost, reqs) if key
+
+    @scratch[y][x] = ' '
+    return x, y, reqs
+  end
+
+  def search_from(x, y, reqs)
+    frontier = []
+    frontier << visit_cell(x - 1, y, reqs)
+    frontier << visit_cell(x, y - 1, reqs)
+    frontier << visit_cell(x + 1, y, reqs)
+    frontier << visit_cell(x, y + 1, reqs)
+    frontier.compact
+  end
+
+  def find_char(char)
+    @maze.each_with_index do |row, y|
+      x = row.index(char)
+      return [x, y] if x
+    end
+    nil
+  end
+
+  def locate_robot
+    @robot = find_char('@')
+  end
+
+  def locate_keys
+    @keys = {}
+    @maze.each_with_index do |row, y|
+      for x in 0...row.size
+        if ('a'..'z').include?(row[x])
+          @keys[row[x]] = [x, y]
+        end
+      end
+    end
+  end
+
+  def make_scratch_maze
+    @scratch = @maze.map(&:dup)
+  end
+end
+
+class State
+  attr_reader :base_cost, :keys, :subset_mask
+
+  def initialize(maze, start_key = '@', keys = "", cost = 0, subset_mask = 0)
+    @at = start_key
+    @maze = maze
+    @keys = keys
+    @base_cost = cost
+    @subset_mask = subset_mask
+  end
+
+  # return a hash from collectable key to move cost
+  def enum_moves
+    @moves ||= @maze.connections_from(@at, @subset_mask)
   end
 
   # return a new State after having taken the given key
-  def apply_move(move)
-    new_maze = dup_maze(@maze)
-    new_maze[@loc[1]][@loc[0]] = '.'
-    new_maze[move.y][move.x] = '@'
-    new_subset = @subset_mask | (1 << (move.key.ord - 'a'.ord))
-    State.new(new_maze, [move.x, move.y], @keys + move.key, @base_cost + move.cost, new_subset)
+  def apply_move(key)
+    State.new(@maze, key, @keys + key, @base_cost + @moves[key], @subset_mask | Maze.key_bit(key))
   end
 
   def print
     puts "Keys: #{@keys}  Base cost: #{@base_cost}  Cost estimate: #{cost_estimate}"
-    puts @maze.join
     puts
   end
 
   # this must not overestimate the cost
   def cost_estimate
-    @cost_estimate ||= furthest_key_distance
-  end
-
-private
-
-  def visit_cell(x, y)
-    if @scratch[y][x] == '.'
-      @scratch[y][x] = ' '
-      return x, y
-    elsif ('a'..'z').include?(@scratch[y][x])
-      @moves.push Move.new(@scratch[y][x], @cost, x, y)
-      return nil
-    elsif ('A'..'Z').include?(@scratch[y][x])
-      return nil unless @keys.include?(@scratch[y][x].downcase)
-      @scratch[y][x] = ' '
-      return x, y
-    end
-    nil
-  end
-
-  def search_from(x, y)
-    frontier = []
-    frontier << visit_cell(x - 1, y)
-    frontier << visit_cell(x, y - 1)
-    frontier << visit_cell(x + 1, y)
-    frontier << visit_cell(x, y + 1)
-    frontier.compact
-  end
-
-  def furthest_key_distance
-    r = 0
-    @maze.each_with_index do |row, y|
-      for x in 0...row.size
-        if ('a'..'z').include? row[x]
-          d = manhattan_distance(x, y)
-          r = d if d > r
-        end
-      end
-    end
-    r
-  end
-
-  def manhattan_distance(x, y)
-    (@loc[0] - x).abs + (@loc[1] - y).abs
+    @cost_estimate ||= @base_cost + @maze.furthest_key_distance(@at, @subset_mask)
   end
 end
 
@@ -123,18 +188,15 @@ def prune_subtree?(at_key, cost_so_far, key_subset)
   return cost_so_far > juncture_cost
 end
 
-
-$maze = ARGF.readlines.map(&:freeze).freeze
-
 $best_cost = LOTS
 $best_subset_costs = {}
 
+maze = Maze.new
 pq = PQueue.new { |a, b| b.cost_estimate <=> a.cost_estimate }
-pq.push State.new(dup_maze, find_char($maze, '@'))
+pq.push State.new(maze)
 until pq.empty?
   state = pq.pop
-  # state.print
-
+  # print state
   next if state.cost_estimate > $best_cost
 
   moves = state.enum_moves
@@ -145,10 +207,10 @@ until pq.empty?
     end
   end
 
-  moves.each_pop do |move|
-    next if state.base_cost + move.cost >= $best_cost
-    next if prune_subtree?(move.key, state.base_cost + move.cost, state.subset_mask)
-    substate = state.apply_move(move)
+  moves.each do |key, cost|
+    next if state.base_cost + cost >= $best_cost
+    next if prune_subtree?(key, state.base_cost + cost, state.subset_mask)
+    substate = state.apply_move(key)
     pq.push(substate)
   end
 end
